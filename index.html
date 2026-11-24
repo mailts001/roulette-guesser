@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Roulette Kinematics & Variance Simulator</title>
+  <link rel="stylesheet" href="https://pyscript.net">
+  <script type="module" src="https://pyscript.net"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 650px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.5rem; background: #fafafa; }
+    .row { margin-bottom: 1rem; }
+    input[type="number"] { padding: 0.5rem; width: 100px; font-size: 1rem; }
+    button { padding: 0.55rem 1.2rem; font-size: 1rem; cursor: pointer; background: #0066cc; color: white; border: none; border-radius: 4px; }
+    button:hover { background: #0052a3; }
+    pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+
+  <h2>Roulette Kinematics &amp; Speed-Noise Simulator</h2>
+  <div class="card">
+    <div class="row">
+      <label for="pocketInput"><strong>Starting Pocket (0–36):</strong></label>
+      <input type="number" id="pocketInput" min="0" max="36" value="17">
+      <button py-click="run_simulation">Run 2,000-Spin Trial</button>
+    </div>
+
+    <div class="row">
+      <label>
+        <input type="checkbox" id="noiseToggle" checked>
+        Include realistic unmeasured dealer &amp; rotor speed variation (&plusmn;8% jitter)
+      </label>
+    </div>
+
+    <pre id="output">Enter a starting pocket (0-36) and click "Run 2,000-Spin Trial".</pre>
+  </div>
+
+  <script type="py">
+    import random
+    from collections import Counter
+    from pyscript import document
+
+    WHEEL_ORDER = (
+        0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
+        5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26
+    )
+
+    def simulate_drop_distribution(start_number: int, add_speed_noise: bool = True, sim_trials: int = 2000):
+        if start_number not in WHEEL_ORDER:
+            raise ValueError("Pocket must be an integer between 0 and 36.")
+
+        # Nominal baseline parameters
+        nom_ball_rev1 = 0.55
+        nom_rotor_rev = 4.20
+        wheel_direction = 1
+        drop_period_sec = 1.25
+        decel_factor = 0.045
+        mean_bounce_pockets = 5
+        scatter_std_dev = 3.5
+
+        start_idx = WHEEL_ORDER.index(start_number)
+        landing_counts = Counter()
+
+        # First compute ideal (zero speed-jitter) target sector for comparison
+        ideal_revs = (drop_period_sec - nom_ball_rev1) / decel_factor
+        ideal_time = (ideal_revs / 2.0) * (nom_ball_rev1 + drop_period_sec)
+        ideal_rotor_move = round(((ideal_time / nom_rotor_rev) % 1.0) * 37) * wheel_direction
+        ideal_ball_move = round((ideal_revs % 1.0) * 37) * (-wheel_direction)
+        ideal_center_idx = (start_idx + ideal_rotor_move + ideal_ball_move + mean_bounce_pockets) % 37
+        neighbor_sector = [WHEEL_ORDER[(ideal_center_idx + i) % 37] for i in range(-2, 3)]
+
+        # Run Monte Carlo trials
+        for _ in range(sim_trials):
+            if add_speed_noise:
+                # +/- 8% standard deviation in unmeasured dealer flick speed & rotor speed
+                ball_rev1 = random.gauss(nom_ball_rev1, nom_ball_rev1 * 0.08)
+                rotor_rev = random.gauss(nom_rotor_rev, nom_rotor_rev * 0.08)
+            else:
+                ball_rev1 = nom_ball_rev1
+                rotor_rev = nom_rotor_rev
+
+            remaining_revs = max(0.1, (drop_period_sec - ball_rev1) / decel_factor)
+            time_to_drop = (remaining_revs / 2.0) * (ball_rev1 + drop_period_sec)
+
+            rotor_pockets = round(((time_to_drop / rotor_rev) % 1.0) * 37) * wheel_direction
+            ball_pockets = round((remaining_revs % 1.0) * 37) * (-wheel_direction)
+            bounce_noise = round(random.gauss(0, scatter_std_dev))
+
+            final_idx = (start_idx + rotor_pockets + ball_pockets + mean_bounce_pockets + bounce_noise) % 37
+            landing_counts[WHEEL_ORDER[final_idx]] += 1
+
+        sector_hits = sum(landing_counts[num] for num in neighbor_sector)
+        sector_prob = (sector_hits / sim_trials) * 100
+        top_5 = [(num, round((cnt / sim_trials) * 100, 2)) for num, cnt in landing_counts.most_common(5)]
+
+        return {
+            "center": WHEEL_ORDER[ideal_center_idx],
+            "sector": neighbor_sector,
+            "sector_prob": round(sector_prob, 2),
+            "top_5": top_5
+        }
+
+    def run_simulation(event):
+        out_el = document.querySelector("#output")
+        try:
+            pocket = int(document.querySelector("#pocketInput").value)
+            use_noise = document.querySelector("#noiseToggle").checked
+            res = simulate_drop_distribution(pocket, add_speed_noise=use_noise)
+
+            mode_label = "ON (±8% Dealer/Rotor Jitter)" if use_noise else "OFF (Locked Ideal Speeds)"
+            out_el.innerText = (
+                f"Start Pocket       : {pocket}\n"
+                f"Speed Noise Mode   : {mode_label}\n"
+                f"Nominal Center     : {res['center']}\n"
+                f"5-Neighbor Sector  : {res['sector']}\n"
+                f"Sector Hit Prob    : {res['sector_prob']}%  (Random Baseline: 13.51%)\n"
+                f"Top 5 Hit Pockets  : {res['top_5']}"
+            )
+        except Exception as e:
+            out_el.innerText = f"Input Error: {e}"
+  </script>
+
+</body>
+</html>
